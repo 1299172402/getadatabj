@@ -1,4 +1,4 @@
-name: GoodSoftware
+name: Build
 
 on:
   workflow_dispatch:
