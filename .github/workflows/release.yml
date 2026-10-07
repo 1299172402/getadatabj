@@ -1,0 +1,94 @@
+name: GoodSoftware
+
+on:
+  workflow_dispatch:
+    inputs:
+      db_link:
+        description: 'quote.db URL'
+        required: true
+        default: 'https://sendit.sh/xxxxx/quote.db'
+      log_link:
+        description: 'app.log URL'
+        required: true
+        default: 'https://sendit.sh/xxxxx/app.log'
+
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download files
+        run: |
+          mkdir -p download
+          wget -O download/quote.db "${{ github.event.inputs.db_link }}"
+          wget -O download/app.log  "${{ github.event.inputs.log_link }}"
+          ls -lh download
+
+      - name: Calculate SHA256 hashes
+        id: hash
+        run: |
+          DB_HASH=$(sha256sum download/quote.db | awk '{print $1}')
+          LOG_HASH=$(sha256sum download/app.log  | awk '{print $1}')
+          echo "db_hash=$DB_HASH" >> $GITHUB_OUTPUT
+          echo "log_hash=$LOG_HASH" >> $GITHUB_OUTPUT
+          echo "DB  hash: $DB_HASH"
+          echo "LOG hash: $LOG_HASH"
+
+      - name: Generate version tag
+        id: version
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          VERSION_NAME="$(date +%Y%m%d_%H%M%S)"
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION_NAME"
+
+      - name: Update history.csv
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          DB_HASH: ${{ steps.hash.outputs.db_hash }}
+          LOG_HASH: ${{ steps.hash.outputs.log_hash }}
+          DB_URL: ${{ github.event.inputs.db_link }}
+          LOG_URL: ${{ github.event.inputs.log_link }}
+        run: |
+          set -e
+          HISTORY=history.csv
+
+          if [ ! -f "$HISTORY" ]; then
+            echo "version,db_sha256,log_sha256,db_url,log_url" > "$HISTORY"
+          fi
+
+          echo "${VERSION_NAME},${DB_HASH},${LOG_HASH},${DB_URL},${LOG_URL}" >> "$HISTORY"
+
+          LATEST_LINE=$(tail -n 1 "$HISTORY")
+          echo "Latest line: $LATEST_LINE"
+
+      - name: Commit history.csv
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add history.csv
+          git commit -m "Add record ${VERSION_NAME}" || echo "Nothing to commit"
+          git push
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          TZ: Asia/Shanghai
+
+      - name: Create Release and upload files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+        run: |
+          TAG="v${VERSION_NAME}"
+          gh release create "$TAG" \
+            download/quote.db \
+            download/app.log \
+            --title "v${VERSION_NAME}" \
+            --notes "version: ${VERSION_NAME}" \
+            --latest
